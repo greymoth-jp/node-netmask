@@ -20,6 +20,12 @@
         "subnet",
         "ipcalc"
     ],
+    "files": [
+        "dist",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE"
+    ],
     "main": "./dist/netmask",
     "types": "./dist/netmask.d.ts",
     "scripts": {
