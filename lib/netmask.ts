@@ -1,197 +1,75 @@
-function long2ip(long: number): string {
-    const a = (long & (0xff << 24)) >>> 24;
-    const b = (long & (0xff << 16)) >>> 16;
-    const c = (long & (0xff << 8)) >>> 8;
-    const d = long & 0xff;
-    return [a, b, c, d].join('.');
-}
+import { ip2long, long2ip, Netmask4Impl } from './netmask4';
+import { ip6bigint, bigint2ip6, Netmask6Impl } from './netmask6';
 
-const chr0 = '0'.charCodeAt(0);
-const chra = 'a'.charCodeAt(0);
-const chrA = 'A'.charCodeAt(0);
-
-function parseNum(s: string): [number, number] {
-    let n = 0;
-    let base = 10;
-    let dmax = '9';
-    let i = 0;
-    if (s.length > 1 && s[i] === '0') {
-        if (s[i + 1] === 'x' || s[i + 1] === 'X') {
-            i += 2;
-            base = 16;
-        } else if ('0' <= s[i + 1] && s[i + 1] <= '9') {
-            i++;
-            base = 8;
-            dmax = '7';
-        }
-    }
-    const start = i;
-    while (i < s.length) {
-        if ('0' <= s[i] && s[i] <= dmax) {
-            n = (n * base + (s.charCodeAt(i) - chr0)) >>> 0;
-        } else if (base === 16) {
-            if ('a' <= s[i] && s[i] <= 'f') {
-                n = (n * base + (10 + s.charCodeAt(i) - chra)) >>> 0;
-            } else if ('A' <= s[i] && s[i] <= 'F') {
-                n = (n * base + (10 + s.charCodeAt(i) - chrA)) >>> 0;
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-        if (n > 0xFFFFFFFF) {
-            throw new Error('too large');
-        }
-        i++;
-    }
-    if (i === start) {
-        throw new Error('empty octet');
-    }
-    return [n, i];
-}
-
-function ip2long(ip: string): number {
-    const b: number[] = [];
-    for (let i = 0; i <= 3; i++) {
-        if (ip.length === 0) {
-            break;
-        }
-        if (i > 0) {
-            if (ip[0] !== '.') {
-                throw new Error('Invalid IP');
-            }
-            ip = ip.substring(1);
-        }
-        const [n, c] = parseNum(ip);
-        ip = ip.substring(c);
-        b.push(n);
-    }
-    if (ip.length !== 0) {
-        throw new Error('Invalid IP');
-    }
-    switch (b.length) {
-        case 1:
-            if (b[0] > 0xFFFFFFFF) {
-                throw new Error('Invalid IP');
-            }
-            return b[0] >>> 0;
-        case 2:
-            if (b[0] > 0xFF || b[1] > 0xFFFFFF) {
-                throw new Error('Invalid IP');
-            }
-            return (b[0] << 24 | b[1]) >>> 0;
-        case 3:
-            if (b[0] > 0xFF || b[1] > 0xFF || b[2] > 0xFFFF) {
-                throw new Error('Invalid IP');
-            }
-            return (b[0] << 24 | b[1] << 16 | b[2]) >>> 0;
-        case 4:
-            if (b[0] > 0xFF || b[1] > 0xFF || b[2] > 0xFF || b[3] > 0xFF) {
-                throw new Error('Invalid IP');
-            }
-            return (b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]) >>> 0;
-        default:
-            throw new Error('Invalid IP');
-    }
-}
+type NetmaskImpl = Netmask4Impl | Netmask6Impl;
 
 class Netmask {
-    maskLong: number;
-    bitmask: number;
-    netLong: number;
-    size: number;
     base: string;
     mask: string;
     hostmask: string;
+    bitmask: number;
+    size: number;
     first: string;
     last: string;
     broadcast: string | undefined;
+
+    private _impl: NetmaskImpl;
 
     constructor(net: string, mask?: string | number) {
         if (typeof net !== 'string') {
             throw new Error("Missing `net' parameter");
         }
-        let maskStr: string | number | undefined = mask;
-        if (!maskStr) {
-            const parts = net.split('/', 2);
-            net = parts[0];
-            maskStr = parts[1];
-        }
-        if (!maskStr) {
-            maskStr = 32;
-        }
-        if (typeof maskStr === 'string' && maskStr.indexOf('.') > -1) {
-            try {
-                this.maskLong = ip2long(maskStr);
-            } catch (error) {
-                throw new Error("Invalid mask: " + maskStr);
-            }
-            this.bitmask = NaN;
-            for (let i = 32; i >= 0; i--) {
-                if (this.maskLong === (0xffffffff << (32 - i)) >>> 0) {
-                    this.bitmask = i;
-                    break;
-                }
-            }
-        } else if (maskStr || maskStr === 0) {
-            this.bitmask = parseInt(maskStr as string, 10);
-            this.maskLong = 0;
-            if (this.bitmask > 0) {
-                this.maskLong = (0xffffffff << (32 - this.bitmask)) >>> 0;
-            }
+
+        // Detect IPv6: check the address part (before any /) for ':'
+        const addrPart = net.indexOf('/') !== -1 ? net.substring(0, net.indexOf('/')) : net;
+        if (addrPart.indexOf(':') !== -1) {
+            this._impl = new Netmask6Impl(net, mask as number | undefined);
         } else {
-            throw new Error("Invalid mask: empty");
+            this._impl = new Netmask4Impl(net, mask);
         }
 
-        try {
-            this.netLong = (ip2long(net) & this.maskLong) >>> 0;
-        } catch (error) {
-            throw new Error("Invalid net address: " + net);
-        }
-
-        if (!(this.bitmask <= 32)) {
-            throw new Error("Invalid mask for ip4: " + maskStr);
-        }
-
-        this.size = Math.pow(2, 32 - this.bitmask);
-        this.base = long2ip(this.netLong);
-        this.mask = long2ip(this.maskLong);
-        this.hostmask = long2ip(~this.maskLong);
-        this.first = this.bitmask <= 30 ? long2ip(this.netLong + 1) : this.base;
-        this.last = this.bitmask <= 30 ? long2ip(this.netLong + this.size - 2) : long2ip(this.netLong + this.size - 1);
-        this.broadcast = this.bitmask <= 30 ? long2ip(this.netLong + this.size - 1) : undefined;
+        this.base = this._impl.base;
+        this.mask = this._impl.mask;
+        this.hostmask = this._impl.hostmask;
+        this.bitmask = this._impl.bitmask;
+        this.size = this._impl.size;
+        this.first = this._impl.first;
+        this.last = this._impl.last;
+        this.broadcast = this._impl.broadcast;
     }
 
     contains(ip: string | Netmask): boolean {
-        if (typeof ip === 'string' && (ip.indexOf('/') > 0 || ip.split('.').length !== 4)) {
-            ip = new Netmask(ip);
+        if (typeof ip === 'string') {
+            // If it has a '/', it's a CIDR block — wrap it
+            if (ip.indexOf('/') > 0) {
+                ip = new Netmask(ip);
+            }
+            // IPv4 shorthand (fewer than 4 octets, no colons) — wrap it
+            else if (ip.indexOf(':') === -1 && ip.split('.').length !== 4) {
+                ip = new Netmask(ip);
+            }
         }
         if (ip instanceof Netmask) {
-            return this.contains(ip.base) && this.contains((ip.broadcast || ip.last));
-        } else {
-            return (ip2long(ip as string) & this.maskLong) >>> 0 === (this.netLong & this.maskLong) >>> 0;
+            return this.contains(ip.base) && this.contains(ip.broadcast || ip.last);
         }
+        // Plain IP string — delegate to impl
+        return this._impl.contains(ip as string);
     }
 
     next(count: number = 1): Netmask {
-        return new Netmask(long2ip(this.netLong + (this.size * count)), this.mask);
+        const nextImpl = this._impl.next(count);
+        const result = new Netmask(nextImpl.base, nextImpl.bitmask);
+        return result;
     }
 
+    /** @deprecated */
     forEach(fn: (ip: string, long: number, index: number) => void): void {
-        let long = ip2long(this.first);
-        const lastLong = ip2long(this.last);
-        let index = 0;
-        while (long <= lastLong) {
-            fn(long2ip(long), long, index);
-            index++;
-            long++;
-        }
+        this._impl.forEach(fn);
     }
 
     toString(): string {
-        return this.base + "/" + this.bitmask;
+        return this._impl.toString();
     }
 }
 
-export { ip2long, long2ip, Netmask };
+export { Netmask };
