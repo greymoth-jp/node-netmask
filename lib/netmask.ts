@@ -8,6 +8,8 @@ class Netmask {
     mask: string;
     hostmask: string;
     bitmask: number;
+    maskLong: number;
+    netLong: number;
     size: number;
     first: string;
     last: string;
@@ -36,6 +38,14 @@ class Netmask {
         this.first = this._impl.first;
         this.last = this._impl.last;
         this.broadcast = this._impl.broadcast;
+
+        if (this._impl instanceof Netmask4Impl) {
+            this.maskLong = this._impl.maskLong;
+            this.netLong = this._impl.netLong;
+        } else {
+            this.maskLong = 0;
+            this.netLong = 0;
+        }
     }
 
     contains(ip: string | Netmask): boolean {
@@ -72,4 +82,4 @@ class Netmask {
     }
 }
 
-export { Netmask };
+export { Netmask, ip2long, long2ip };
